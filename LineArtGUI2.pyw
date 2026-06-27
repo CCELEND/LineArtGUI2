@@ -4,6 +4,124 @@ import tkinter as tk
 from tkinter import filedialog, messagebox
 import ttkbootstrap as ttk
 from ttkbootstrap.constants import *
+from PIL import Image, ImageTk
+import platform
+import tempfile
+import os
+
+# 创建一个新窗口，使用 geometry 设置大小和位置
+def creat_Toplevel(title: str, width=1366, height=769, x=300, y=120) -> ttk.Toplevel:
+    if not isinstance(title, str):
+        raise TypeError("title参数必须是字符串类型")
+    for param, name in [(width, "width"), (height, "height"), (x, "x"), (y, "y")]:
+        if param is not None and not isinstance(param, int):
+            raise TypeError(f"{name}参数必须是整数类型或None")
+
+    new_window = ttk.Toplevel(title=title)
+    if width is not None and height is not None:
+        new_window.geometry(f"{width}x{height}+{x}+{y}")
+    elif width is not None:
+        new_window.geometry(f"{width}x{new_window.winfo_reqheight()}+{x}+{y}")
+    elif height is not None:
+        new_window.geometry(f"{new_window.winfo_reqwidth()}x{height}+{x}+{y}")
+    return new_window
+
+# 显示图片，根据宽度调整，加入滚动条
+class ImageViewerWithScrollbar:
+    def __init__(self, parent_frame, parent_width=1000, parent_height=565, image_path=None):
+        self.parent_frame = parent_frame
+        self.parent_width = parent_width
+        self.parent_height = parent_height
+        self.image_path = image_path
+
+        self.image = Image.open(self.image_path)
+        self.original_width, self.original_height = self.image.size
+
+        self.tk_image = ImageTk.PhotoImage(self.image)
+
+        self.canvas = tk.Canvas(self.parent_frame, width=self.parent_width, height=self.parent_height)
+        self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        self.image_id = self.canvas.create_image(0, 0, anchor=tk.NW, image=self.tk_image)
+        self.canvas.config(scrollregion=(0, 0, self.original_width, self.original_height))
+
+        self.v_scrollbar = tk.Scrollbar(self.parent_frame, orient=tk.VERTICAL, command=self.canvas.yview)
+        self.v_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.canvas.config(yscrollcommand=self.v_scrollbar.set)
+
+        self.canvas.image = self.tk_image
+
+        self.last_width = parent_frame.winfo_width()
+        self.last_height = parent_frame.winfo_height()
+        self.resize_timeout = None
+        self.parent_frame.bind("<Configure>", self.on_resize)
+        self.bind_mouse_wheel_events()
+
+        self.resize_image()
+
+    def update_image(self, new_image_path):
+        # 更新显示新图片
+        self.image_path = new_image_path
+        self.image = Image.open(self.image_path)
+        self.original_width, self.original_height = self.image.size
+        self.tk_image = ImageTk.PhotoImage(self.image)
+        self.canvas.itemconfig(self.image_id, image=self.tk_image)
+        self.canvas.image = self.tk_image
+        self.canvas.config(scrollregion=(0, 0, self.original_width, self.original_height))
+        self.resize_image()
+        self.canvas.update_idletasks()
+
+    def on_resize(self, event):
+        if event.widget != self.parent_frame:
+            return
+        if event.width < 50 or event.height < 50:
+            return
+        if event.width != self.last_width or event.height != self.last_height:
+            self.last_width = event.width
+            self.last_height = event.height
+            if self.resize_timeout:
+                self.parent_frame.after_cancel(self.resize_timeout)
+            self.resize_timeout = self.parent_frame.after(200, self.resize_image)
+
+    def resize_image(self):
+        scrollbar_width = self.v_scrollbar.winfo_width() if self.v_scrollbar.winfo_ismapped() else 0
+        new_width = self.parent_frame.winfo_width() - scrollbar_width
+        new_width = max(1, new_width)
+        new_height = int(self.original_height * (new_width / self.original_width))
+        new_height = max(1, new_height)
+
+        resized_image = self.image.resize((new_width, new_height), Image.LANCZOS)
+        self.resized_tk_image = ImageTk.PhotoImage(resized_image)
+        self.canvas.itemconfig(self.image_id, image=self.resized_tk_image)
+        self.canvas.image = self.resized_tk_image
+        self.canvas.config(scrollregion=(0, 0, new_width, new_height))
+
+    def on_mouse_wheel(self, event):
+        if platform.system() == "Windows":
+            self.canvas.yview_scroll(-1 * (event.delta // 120), "units")
+        elif platform.system() == "Darwin":
+            self.canvas.yview_scroll(-1 * event.delta, "units")
+        else:
+            if event.num == 4:
+                self.canvas.yview_scroll(-1, "units")
+            elif event.num == 5:
+                self.canvas.yview_scroll(1, "units")
+
+    def bind_mouse_wheel_events(self):
+        if platform.system() == "Windows":
+            self.canvas.bind("<MouseWheel>", self.on_mouse_wheel)
+        elif platform.system() == "Darwin":
+            self.canvas.bind("<MouseWheel>", self.on_mouse_wheel)
+        else:
+            self.canvas.bind("<Button-4>", self.on_mouse_wheel)
+            self.canvas.bind("<Button-5>", self.on_mouse_wheel)
+
+    def destroy(self):
+        self.canvas.delete("all")
+        self.canvas.image = None
+        self.canvas.destroy()
+        self.v_scrollbar.destroy()
+
 
 class ToolTip:
     def __init__(self, widget, text=''):
@@ -60,8 +178,11 @@ class LineArtGUI2:
         self.input_path = tk.StringVar(value="未选择图片")
         self.min_radius = tk.IntVar(value=2)
         self.brightness_offset = tk.IntVar(value=50)
-        # 修改为 StringVar，默认显示 "无"
-        self.enhance_mode = tk.StringVar(value="无")  
+        self.enhance_mode = tk.StringVar(value="无")
+
+        self.preview_window = None          # 预览窗口引用
+        self.viewer = None                  # 图片查看器对象
+        self.temp_preview_path = None       # 临时文件路径
 
         self.create_widgets()
 
@@ -92,7 +213,6 @@ class LineArtGUI2:
         bright_cb.grid(row=0, column=3, padx=5, pady=6)
 
         ttk.Label(param_frame, text="清晰度增强：").grid(row=1, column=0, sticky=W, padx=5, pady=6)
-        # values 为显示文本，textvariable 绑定到 StringVar
         enhance_cb = ttk.Combobox(param_frame, textvariable=self.enhance_mode,
                                   values=["无", "对比度拉伸", "轻度锐化", "强锐化+去噪"],
                                   width=15, state=READONLY)
@@ -100,6 +220,12 @@ class LineArtGUI2:
 
         btn_frame = ttk.Frame(self.root, padding=10)
         btn_frame.pack(fill=X)
+
+        self.preview_btn = ttk.Button(
+            btn_frame, text="预览线稿", command=self.preview_lineart,
+            bootstyle=INFO, width=20
+        )
+        self.preview_btn.pack(side=LEFT, padx=5)
 
         self.gen_btn = ttk.Button(
             btn_frame, text="生成线稿", command=self.generate_lineart,
@@ -137,21 +263,17 @@ class LineArtGUI2:
         if offset != 0:
             result = np.clip(result.astype(np.int16) + offset, 0, 255).astype(np.uint8)
 
-        # 对比度拉伸
         if enhance_mode == 1:
             p_low, p_high = np.percentile(result, (2, 98))
             if p_high > p_low:
                 result = np.clip((result - p_low) / (p_high - p_low) * 255, 0, 255).astype(np.uint8)
-        # 轻度锐化（USM）
         elif enhance_mode == 2:
             gaussian = cv2.GaussianBlur(result, (0, 0), sigmaX=1.5)
             result = cv2.addWeighted(result, 1.5, gaussian, -0.5, 0)
             result = np.clip(result, 0, 255).astype(np.uint8)
         elif enhance_mode == 3:
-            # 先轻度开运算去除孤立噪点
             kernel_open = np.ones((2, 2), np.uint8)
             result = cv2.morphologyEx(result, cv2.MORPH_OPEN, kernel_open)
-            # 再强锐化
             gaussian = cv2.GaussianBlur(result, (0, 0), sigmaX=2.0)
             result = cv2.addWeighted(result, 2.0, gaussian, -1.0, 0)
             result = np.clip(result, 0, 255).astype(np.uint8)
@@ -161,6 +283,89 @@ class LineArtGUI2:
 
         cv2.imencode('.png', result)[1].tofile(output_path)
 
+    def preview_lineart(self):
+        input_path = self.input_path.get()
+        if input_path == "未选择图片":
+            messagebox.showwarning("提示", "请先选择图片！")
+            return
+
+        # 如果预览窗口存在且有效，则更新图片
+        if self.preview_window is not None and self.preview_window.winfo_exists():
+            # 生成最新线稿到临时文件
+            radius = self.min_radius.get()
+            bright = self.brightness_offset.get()
+            enhance_str = self.enhance_mode.get()
+            enhance_map = {"无": 0, "对比度拉伸": 1, "轻度锐化": 2, "强锐化+去噪": 3}
+            enhance = enhance_map.get(enhance_str, 0)
+
+            try:
+                self.preview_btn.config(text="预览中...", state=DISABLED)
+                self.root.update()
+
+                self.image_to_lineart(
+                    input_path=input_path,
+                    output_path=self.temp_preview_path,
+                    min_radius=radius,
+                    brightness_offset=bright,
+                    enhance_mode=enhance,
+                    invert=False
+                )
+
+                # 更新查看器中的图片
+                self.viewer.update_image(self.temp_preview_path)
+                self.preview_window.lift()  # 窗口提到最前
+            except Exception as e:
+                messagebox.showerror("错误", f"预览更新失败：{str(e)}")
+            finally:
+                self.preview_btn.config(text="预览线稿", state=NORMAL)
+            return
+
+        # 否则创建新预览窗口
+        # 生成临时文件（如果尚未创建）
+        if self.temp_preview_path is None:
+            fd, self.temp_preview_path = tempfile.mkstemp(suffix='.png', prefix='lineart_preview_')
+            os.close(fd)
+
+        radius = self.min_radius.get()
+        bright = self.brightness_offset.get()
+        enhance_str = self.enhance_mode.get()
+        enhance_map = {"无": 0, "对比度拉伸": 1, "轻度锐化": 2, "强锐化+去噪": 3}
+        enhance = enhance_map.get(enhance_str, 0)
+
+        try:
+            self.preview_btn.config(text="预览中...", state=DISABLED)
+            self.root.update()
+
+            self.image_to_lineart(
+                input_path=input_path,
+                output_path=self.temp_preview_path,
+                min_radius=radius,
+                brightness_offset=bright,
+                enhance_mode=enhance,
+                invert=False
+            )
+
+            preview_win = creat_Toplevel("线稿预览", width=1000, height=565, x=70, y=200)
+            frame = ttk.Frame(preview_win)
+            frame.pack(fill=tk.BOTH, expand=True)
+
+            viewer = ImageViewerWithScrollbar(frame, 1000, 565, self.temp_preview_path)
+
+            self.preview_window = preview_win
+            self.viewer = viewer
+
+            def on_close():
+                self.viewer.destroy()
+                preview_win.destroy()
+                self.preview_window = None
+                self.viewer = None
+            preview_win.protocol("WM_DELETE_WINDOW", on_close)
+
+        except Exception as e:
+            messagebox.showerror("错误", f"预览失败：{str(e)}")
+        finally:
+            self.preview_btn.config(text="预览线稿", state=NORMAL)
+
     def generate_lineart(self):
         input_path = self.input_path.get()
         if input_path == "未选择图片":
@@ -169,9 +374,7 @@ class LineArtGUI2:
 
         radius = self.min_radius.get()
         bright = self.brightness_offset.get()
-        enhance_str = self.enhance_mode.get()   # 获取字符串
-
-        # 映射为整数
+        enhance_str = self.enhance_mode.get()
         enhance_map = {"无": 0, "对比度拉伸": 1, "轻度锐化": 2, "强锐化+去噪": 3}
         enhance = enhance_map.get(enhance_str, 0)
 
@@ -204,6 +407,6 @@ class LineArtGUI2:
 if __name__ == "__main__":
     app = ttk.Window(themename="cosmo")
     app.title("图片转线稿工具2.0")
-    app.geometry("695x280")
+    app.geometry("695x280+1100+360")
     gui = LineArtGUI2(app)
     app.mainloop()
