@@ -347,8 +347,9 @@ class PreviewWindow(QMainWindow):
         super().__init__(parent)
         self.setWindowTitle("线稿预览")
         # 设置较大的默认尺寸和最小尺寸
-        self.resize(1200, 900)
+        self.resize(1000, 900)
         self.setMinimumSize(800, 600)
+        self.move(70, 70)
 
         self.viewer = ImageViewer(self)
         self.setCentralWidget(self.viewer)
@@ -388,5 +389,6 @@ if __name__ == "__main__":
     """)
 
     window = LineArtGUI()
+    window.move(1100, 360)
     window.show()
     sys.exit(app.exec_())
