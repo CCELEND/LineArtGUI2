@@ -378,6 +378,9 @@ if __name__ == "__main__":
     app = QApplication(sys.argv)
     app.setFont(QFont("Microsoft YaHei", 10))
 
+    from PyQt5.QtGui import QIcon
+    app.setWindowIcon(QIcon("app_icon.png"))
+
     # 全局样式
     app.setStyleSheet("""
         QMainWindow { background: #ffffff; }
@@ -389,6 +392,6 @@ if __name__ == "__main__":
     """)
 
     window = LineArtGUI()
-    window.move(1100, 360)
+    window.move(1100, 360) 
     window.show()
     sys.exit(app.exec_())
